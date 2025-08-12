@@ -1,5 +1,4 @@
 import express from 'express';
-import fetch from 'node-fetch';
 import GtfsRealtimeBindings from 'gtfs-realtime-bindings';
 
 const VEHICLE_POSITIONS_URL =
@@ -11,13 +10,16 @@ app.use(express.static('public'));
 
 app.get('/api/vehicle_positions.json', async (_req, res) => {
   try {
-    const r = await fetch(VEHICLE_POSITIONS_URL, { cache: 'no-store' });
+    const r = await fetch(VEHICLE_POSITIONS_URL, {
+      cache: 'no-store',
+      headers: { 'user-agent': 'adelaide-buses-live/1.0' }
+    });
     if (!r.ok) throw new Error(`Feed error ${r.status}`);
     const buf = Buffer.from(await r.arrayBuffer());
     const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(buf);
 
     const vehicles = feed.entity
-      .filter(e => e.vehicle && e.vehicle.position)
+      .filter(e => e.vehicle?.position?.latitude && e.vehicle?.position?.longitude)
       .map(e => {
         const v = e.vehicle;
         return {
@@ -26,7 +28,7 @@ app.get('/api/vehicle_positions.json', async (_req, res) => {
           route: v.trip?.routeId || v.trip?.tripId || null,
           lat: v.position.latitude,
           lon: v.position.longitude,
-          bearing: v.position.bearing ?? null,
+          bearing: typeof v.position.bearing === 'number' ? v.position.bearing : null,
           timestamp: v.timestamp ? Number(v.timestamp) * 1000 : null
         };
       });
@@ -40,6 +42,4 @@ app.get('/api/vehicle_positions.json', async (_req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () =>
-  console.log(`Server running on http://localhost:${PORT}`)
-);
+app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
