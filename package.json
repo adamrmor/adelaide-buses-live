@@ -5,7 +5,7 @@
   "description": "Simple map showing live Adelaide Metro buses",
   "dependencies": {
     "express": "^4.19.2",
-    "gtfs-realtime-bindings": "^1.2.0",
+    "gtfs-realtime-bindings": "^1.1.1",
     "node-fetch": "^3.3.2"
   },
   "scripts": {
