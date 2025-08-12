@@ -4,45 +4,84 @@
   <meta charset="utf-8" />
   <title>Adelaide Buses Live</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#0b5fff">
+
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css">
+
   <style>
-    html, body, #map { height: 100%; margin: 0; }
-    .legend {
-      position: absolute; top: 8px; left: 8px; background: #fff; padding: 6px 8px;
-      border: 1px solid #ccc; border-radius: 4px; font: 14px Arial, sans-serif; z-index: 1000;
+    html, body, #map { height: 100%; margin: 0; font-family: Arial, Helvetica, sans-serif; }
+    .panel {
+      position: absolute; left: 8px; background: #fff; border: 1px solid #ccc; border-radius: 4px; padding: 6px 8px; z-index: 1000;
+      box-shadow: 0 1px 3px rgba(0,0,0,.15);
     }
-    /* Icon: circular badge + arrow showing bearing */
-    .bus-icon {
-      width: 20px; height: 20px; border-radius: 50%;
-      border: 2px solid #000; box-sizing: border-box; position: relative;
+    #status { top: 8px; }
+    #filters { top: 56px; max-width: 360px; }
+    #filters button {
+      margin: 2px; padding: 3px 8px; border: 1px solid #aaa; border-radius: 12px; background: #f5f5f5; cursor: pointer;
     }
+    #filters button.off { opacity: .4; }
+    .bus-icon { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #000; box-sizing: border-box; position: relative; }
     .bus-icon .arrow {
-      position: absolute; left: 50%; top: 50%;
-      width: 0; height: 0; transform-origin: 50% 50%;
-      /* triangle pointer */
-      border-left: 4px solid transparent;
-      border-right: 4px solid transparent;
-      border-bottom: 8px solid #000; /* arrow colour */
+      position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform-origin: 50% 50%;
+      border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 10px solid #000;
       transform: translate(-50%, -70%) rotate(0deg);
+    }
+    .toolbar { position: absolute; right: 8px; top: 8px; z-index: 1000; display: flex; gap: 6px; }
+    .toolbar button { padding: 6px 10px; border: 1px solid #ccc; background: #fff; border-radius: 4px; cursor: pointer; }
+    @media (max-width: 480px) {
+      #filters { max-width: 86vw; }
     }
   </style>
 </head>
 <body>
   <div id="map"></div>
-  <div class="legend" id="legend">Adelaide Metro buses (15 s refresh)</div>
+
+  <div id="status" class="panel">Loading…</div>
+  <div id="filters" class="panel" hidden></div>
+  <div class="toolbar">
+    <button id="fit">Fit to buses</button>
+    <button id="near">Near me</button>
+  </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
   <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(()=>{});
+    }
+
     const map = L.map('map').setView([-34.9285, 138.6007], 12);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
 
-    const markers = new Map();
+    const statusEl = document.getElementById('status');
+    const filtersEl = document.getElementById('filters');
+
+    const cluster = L.markerClusterGroup({ disableClusteringAtZoom: 15 });
+    map.addLayer(cluster);
+
+    const markers = new Map();              // id -> Leaflet marker
+    const trails = new Map();               // id -> Polyline
+    const historyPoints = new Map();        // id -> array of LatLng
+    const MAX_TRAIL_POINTS = 5;
+
+    const seenRoutes = new Map();           // route -> colour
+    const activeRoutes = new Set();         // empty = all on
+
     const PROXY_URL = '/api/vehicle_positions.json';
+    let firstFitDone = false;
+    let lastUpdateTs = 0;
 
-    // Deterministic colour per route id
     const palette = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd',
                      '#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf'];
-    function colourFor(route) {
+    function colourFor(route, override) {
+      if (override) return override;
       if (!route) return '#4b9cd3';
       let h = 0;
       for (let i = 0; i < route.length; i++) h = (h * 31 + route.charCodeAt(i)) >>> 0;
@@ -55,20 +94,48 @@
       div.style.background = colour;
       const arrow = document.createElement('div');
       arrow.className = 'arrow';
+      arrow.style.borderBottomColor = '#000';
       arrow.style.transform = `translate(-50%, -70%) rotate(${Number(bearing || 0)}deg)`;
       div.appendChild(arrow);
-      return L.divIcon({ html: div, className: '', iconSize: [24,24], iconAnchor: [12,12] });
+      return L.divIcon({ html: div, className: '', iconSize: [26,26], iconAnchor: [13,13] });
     }
 
-    // Simple legend that updates with a few route colours seen on screen
-    const seenRoutes = new Map();
-    function updateLegend() {
-      const el = document.getElementById('legend');
-      const sample = Array.from(seenRoutes.entries()).slice(0, 6);
-      const chips = sample.map(([route, colour]) =>
-        `<span style="display:inline-block;width:10px;height:10px;margin-right:6px;border:1px solid #000;background:${colour};vertical-align:middle"></span>${route || 'n/a'}`
-      ).join('  ');
-      el.innerHTML = chips ? `Routes on map: ${chips}` : 'Adelaide Metro buses (15 s refresh)';
+    function setStatus(updated, stale) {
+      lastUpdateTs = updated || Date.now();
+      const sec = Math.round((Date.now() - lastUpdateTs) / 1000);
+      let msg = `Updated ${sec}s ago`;
+      if (stale || sec > 60) msg = `Stale data. Last updated ${sec}s ago`;
+      statusEl.textContent = msg;
+    }
+    setInterval(() => setStatus(lastUpdateTs), 1000);
+
+    function renderFilters(routesSet) {
+      const routes = Array.from(routesSet.keys()).sort();
+      if (!routes.length) { filtersEl.hidden = true; return; }
+      filtersEl.hidden = false;
+      const chips = routes.slice(0, 30).map(r => {
+        const c = routesSet.get(r) || '#aaa';
+        const on = activeRoutes.size === 0 || activeRoutes.has(r);
+        return `<button data-r="${r}" class="${on?'':'off'}">
+          <span style="display:inline-block;width:10px;height:10px;border:1px solid #000;background:${c};margin-right:6px;vertical-align:middle"></span>
+          ${r || 'n/a'}
+        </button>`;
+      }).join(' ');
+      filtersEl.innerHTML = `<div style="margin-bottom:4px">Filter routes:</div>${chips}`;
+      filtersEl.onclick = e => {
+        const r = e.target.closest('button')?.dataset?.r;
+        if (r === undefined) return;
+        if (activeRoutes.has(r)) activeRoutes.delete(r); else activeRoutes.add(r);
+        // Toggle visibility
+        for (const [id, m] of markers) {
+          const rt = m.options._route || '';
+          const show = activeRoutes.size === 0 || activeRoutes.has(rt);
+          if (show) cluster.addLayer(m); else cluster.removeLayer(m);
+          const tr = trails.get(id);
+          if (tr) { if (show) tr.addTo(map); else map.removeLayer(tr); }
+        }
+        renderFilters(seenRoutes);
+      };
     }
 
     async function loadVehicles() {
@@ -77,40 +144,108 @@
         if (!res.ok) throw new Error('Bad response');
         const data = await res.json();
 
-        const seen = new Set();
-        (data.vehicles || []).forEach(v => {
+        const vehicles = data.vehicles || [];
+        const stale = !!data.stale;
+        setStatus(data.updated, stale);
+
+        const bounds = L.latLngBounds([]);
+        const seenIds = new Set();
+
+        vehicles.forEach(v => {
           if (typeof v.lat !== 'number' || typeof v.lon !== 'number') return;
           const id = v.id || v.label;
           const pos = [v.lat, v.lon];
           const route = v.route || '';
-          const colour = colourFor(route);
-          seenRoutes.set(route, colour);
+          const routeColour = v.route_color || colourFor(route);
+          seenRoutes.set(route, routeColour);
+          seenIds.add(id);
+          bounds.extend(pos);
+
+          const visible = activeRoutes.size === 0 || activeRoutes.has(route);
 
           if (markers.has(id)) {
             const m = markers.get(id);
             m.setLatLng(pos);
-            m.setIcon(makeIcon(colour, v.bearing));
-            m._popup?.setContent(`<b>${v.label || 'Bus ' + id}</b><br>Route: ${route || 'n/a'}<br>Bearing: ${v.bearing ?? 'n/a'}`);
+            m.setIcon(makeIcon(routeColour, v.bearing));
+            m.options._route = route;
+            if (visible) cluster.addLayer(m); else cluster.removeLayer(m);
+
+            // trail
+            const hist = historyPoints.get(id) || [];
+            hist.push(pos);
+            while (hist.length > MAX_TRAIL_POINTS) hist.shift();
+            historyPoints.set(id, hist);
+
+            const line = trails.get(id) || L.polyline(hist, { weight: 2, opacity: 0.6 });
+            line.setLatLngs(hist);
+            trails.set(id, line);
+            if (visible) line.addTo(map); else map.removeLayer(line);
+
+            // popup
+            m._popup?.setContent(popupHtml(v));
           } else {
-            const m = L.marker(pos, { icon: makeIcon(colour, v.bearing), title: v.label || id });
-            m.bindPopup(`<b>${v.label || 'Bus ' + id}</b><br>Route: ${route || 'n/a'}<br>Bearing: ${v.bearing ?? 'n/a'}`);
-            m.addTo(map);
+            const m = L.marker(pos, { icon: makeIcon(routeColour, v.bearing), title: v.label || id });
+            m.options._route = route;
+            m.bindPopup(popupHtml(v));
             markers.set(id, m);
+            if (visible) cluster.addLayer(m);
+
+            historyPoints.set(id, [pos]);
+            const line = L.polyline([pos], { weight: 2, opacity: 0.6 });
+            trails.set(id, line);
+            if (visible) line.addTo(map);
           }
         });
 
-        // remove stale markers
+        // prune stale vehicles
         for (const [id, m] of markers.entries()) {
-          if (!data.vehicles?.some(v => (v.id || v.label) === id)) {
-            map.removeLayer(m);
+          if (!seenIds.has(id)) {
+            cluster.removeLayer(m);
             markers.delete(id);
+            const tr = trails.get(id);
+            if (tr) { map.removeLayer(tr); trails.delete(id); }
+            historyPoints.delete(id);
           }
         }
-        updateLegend();
+
+        renderFilters(seenRoutes);
+
+        // fit once
+        if (!firstFitDone && bounds.isValid()) {
+          firstFitDone = true;
+          map.fitBounds(bounds.pad(0.1));
+        }
       } catch (err) {
         console.error('Failed to load vehicle positions', err);
+        statusEl.textContent = 'Error loading data';
       }
     }
+
+    function popupHtml(v) {
+      const routeName = v.route_short_name || v.route || 'n/a';
+      const bearing = v.bearing ?? 'n/a';
+      const time = v.timestamp ? new Date(v.timestamp).toLocaleTimeString() : 'n/a';
+      return `<b>${v.label || 'Bus ' + (v.id || '')}</b><br>
+              Route: ${routeName}<br>
+              Bearing: ${bearing}<br>
+              Seen: ${time}`;
+    }
+
+    // controls
+    document.getElementById('fit').onclick = () => {
+      const b = L.latLngBounds([]);
+      markers.forEach(m => { if (map.hasLayer(m)) b.extend(m.getLatLng()); });
+      if (b.isValid()) map.fitBounds(b.pad(0.1));
+    };
+
+    document.getElementById('near').onclick = () => {
+      if (!navigator.geolocation) return alert('Geolocation not available');
+      navigator.geolocation.getCurrentPosition(pos => {
+        const latlng = [pos.coords.latitude, pos.coords.longitude];
+        map.setView(latlng, 14);
+        L.circleMarker(latlng, { radius: 6, weight: 2 }).addTo(map).bindPopup('You are here').openPopup();
+      }, () => alert('Could not get your location'));
+    };
 
     loadVehicles();
     setInterval(loadVehicles, 15000);
