@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Adelaide Buses Live</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    crossorigin=""
+  />
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+    .legend {
+      position: absolute; top: 8px; left: 8px; background: #fff; padding: 6px 8px;
+      border: 1px solid #ccc; border-radius: 4px; font: 14px Arial, sans-serif;
+      z-index: 1000;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="legend">Adelaide Metro buses (updates every 15s)</div>
+
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    crossorigin=""
+  ></script>
+  <script>
+    const map = L.map('map').setView([-34.9285, 138.6007], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    const markers = new Map();
+    const PROXY_URL = '/api/vehicle_positions.json';
+
+    async function loadVehicles() {
+      try {
+        const res = await fetch(PROXY_URL, { cache: 'no-store' });
+        if (!res.ok) throw new Error('Bad response');
+        const data = await res.json();
+
+        const seen = new Set();
+        data.vehicles.forEach(v => {
+          if (typeof v.lat !== 'number' || typeof v.lon !== 'number') return;
+          seen.add(v.id);
+          const pos = [v.lat, v.lon];
+
+          if (markers.has(v.id)) {
+            markers.get(v.id).setLatLng(pos);
+          } else {
+            const m = L.marker(pos, { title: v.label || v.id });
+            m.bindPopup(`<b>${v.label || 'Bus ' + v.id}</b><br>Route: ${v.route || 'n/a'}`);
+            m.addTo(map);
+            markers.set(v.id, m);
+          }
+        });
+
+        for (const [id, m] of markers.entries()) {
+          if (!seen.has(id)) {
+            map.removeLayer(m);
+            markers.delete(id);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load vehicle positions', err);
+      }
+    }
+
+    loadVehicles();
+    setInterval(loadVehicles, 15000);
+  </script>
+</body>
+</html>
