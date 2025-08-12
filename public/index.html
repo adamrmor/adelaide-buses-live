@@ -68,4 +68,52 @@
       const chips = sample.map(([route, colour]) =>
         `<span style="display:inline-block;width:10px;height:10px;margin-right:6px;border:1px solid #000;background:${colour};vertical-align:middle"></span>${route || 'n/a'}`
       ).join('  ');
-      el.innerH
+      el.innerHTML = chips ? `Routes on map: ${chips}` : 'Adelaide Metro buses (15 s refresh)';
+    }
+
+    async function loadVehicles() {
+      try {
+        const res = await fetch(PROXY_URL, { cache: 'no-store' });
+        if (!res.ok) throw new Error('Bad response');
+        const data = await res.json();
+
+        const seen = new Set();
+        (data.vehicles || []).forEach(v => {
+          if (typeof v.lat !== 'number' || typeof v.lon !== 'number') return;
+          const id = v.id || v.label;
+          const pos = [v.lat, v.lon];
+          const route = v.route || '';
+          const colour = colourFor(route);
+          seenRoutes.set(route, colour);
+
+          if (markers.has(id)) {
+            const m = markers.get(id);
+            m.setLatLng(pos);
+            m.setIcon(makeIcon(colour, v.bearing));
+            m._popup?.setContent(`<b>${v.label || 'Bus ' + id}</b><br>Route: ${route || 'n/a'}<br>Bearing: ${v.bearing ?? 'n/a'}`);
+          } else {
+            const m = L.marker(pos, { icon: makeIcon(colour, v.bearing), title: v.label || id });
+            m.bindPopup(`<b>${v.label || 'Bus ' + id}</b><br>Route: ${route || 'n/a'}<br>Bearing: ${v.bearing ?? 'n/a'}`);
+            m.addTo(map);
+            markers.set(id, m);
+          }
+        });
+
+        // remove stale markers
+        for (const [id, m] of markers.entries()) {
+          if (!data.vehicles?.some(v => (v.id || v.label) === id)) {
+            map.removeLayer(m);
+            markers.delete(id);
+          }
+        }
+        updateLegend();
+      } catch (err) {
+        console.error('Failed to load vehicle positions', err);
+      }
+    }
+
+    loadVehicles();
+    setInterval(loadVehicles, 15000);
+  </script>
+</body>
+</html>
