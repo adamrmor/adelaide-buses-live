@@ -1,14 +1,15 @@
 {
-  "type": "module",
   "name": "adelaide-buses-live",
   "version": "1.0.0",
+  "type": "module",
   "description": "Simple map showing live Adelaide Metro buses",
+  "engines": { "node": ">=18" },
   "dependencies": {
     "express": "^4.19.2",
-    "gtfs-realtime-bindings": "^1.1.1",
-    "node-fetch": "^3.3.2"
+    "gtfs-realtime-bindings": "1.1.1"
   },
   "scripts": {
     "start": "node server.js"
   }
 }
+
