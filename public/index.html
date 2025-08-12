@@ -4,73 +4,68 @@
   <meta charset="utf-8" />
   <title>Adelaide Buses Live</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-    crossorigin=""
-  />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
   <style>
     html, body, #map { height: 100%; margin: 0; }
     .legend {
       position: absolute; top: 8px; left: 8px; background: #fff; padding: 6px 8px;
-      border: 1px solid #ccc; border-radius: 4px; font: 14px Arial, sans-serif;
-      z-index: 1000;
+      border: 1px solid #ccc; border-radius: 4px; font: 14px Arial, sans-serif; z-index: 1000;
+    }
+    /* Icon: circular badge + arrow showing bearing */
+    .bus-icon {
+      width: 20px; height: 20px; border-radius: 50%;
+      border: 2px solid #000; box-sizing: border-box; position: relative;
+    }
+    .bus-icon .arrow {
+      position: absolute; left: 50%; top: 50%;
+      width: 0; height: 0; transform-origin: 50% 50%;
+      /* triangle pointer */
+      border-left: 4px solid transparent;
+      border-right: 4px solid transparent;
+      border-bottom: 8px solid #000; /* arrow colour */
+      transform: translate(-50%, -70%) rotate(0deg);
     }
   </style>
 </head>
 <body>
   <div id="map"></div>
-  <div class="legend">Adelaide Metro buses (updates every 15s)</div>
+  <div class="legend" id="legend">Adelaide Metro buses (15 s refresh)</div>
 
-  <script
-    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-    crossorigin=""
-  ></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script>
     const map = L.map('map').setView([-34.9285, 138.6007], 12);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '&copy; OpenStreetMap contributors'
-    }).addTo(map);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
 
     const markers = new Map();
     const PROXY_URL = '/api/vehicle_positions.json';
 
-    async function loadVehicles() {
-      try {
-        const res = await fetch(PROXY_URL, { cache: 'no-store' });
-        if (!res.ok) throw new Error('Bad response');
-        const data = await res.json();
-
-        const seen = new Set();
-        data.vehicles.forEach(v => {
-          if (typeof v.lat !== 'number' || typeof v.lon !== 'number') return;
-          seen.add(v.id);
-          const pos = [v.lat, v.lon];
-
-          if (markers.has(v.id)) {
-            markers.get(v.id).setLatLng(pos);
-          } else {
-            const m = L.marker(pos, { title: v.label || v.id });
-            m.bindPopup(`<b>${v.label || 'Bus ' + v.id}</b><br>Route: ${v.route || 'n/a'}`);
-            m.addTo(map);
-            markers.set(v.id, m);
-          }
-        });
-
-        for (const [id, m] of markers.entries()) {
-          if (!seen.has(id)) {
-            map.removeLayer(m);
-            markers.delete(id);
-          }
-        }
-      } catch (err) {
-        console.error('Failed to load vehicle positions', err);
-      }
+    // Deterministic colour per route id
+    const palette = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd',
+                     '#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf'];
+    function colourFor(route) {
+      if (!route) return '#4b9cd3';
+      let h = 0;
+      for (let i = 0; i < route.length; i++) h = (h * 31 + route.charCodeAt(i)) >>> 0;
+      return palette[h % palette.length];
     }
 
-    loadVehicles();
-    setInterval(loadVehicles, 15000);
-  </script>
-</body>
-</html>
+    function makeIcon(colour, bearing) {
+      const div = document.createElement('div');
+      div.className = 'bus-icon';
+      div.style.background = colour;
+      const arrow = document.createElement('div');
+      arrow.className = 'arrow';
+      arrow.style.transform = `translate(-50%, -70%) rotate(${Number(bearing || 0)}deg)`;
+      div.appendChild(arrow);
+      return L.divIcon({ html: div, className: '', iconSize: [24,24], iconAnchor: [12,12] });
+    }
+
+    // Simple legend that updates with a few route colours seen on screen
+    const seenRoutes = new Map();
+    function updateLegend() {
+      const el = document.getElementById('legend');
+      const sample = Array.from(seenRoutes.entries()).slice(0, 6);
+      const chips = sample.map(([route, colour]) =>
+        `<span style="display:inline-block;width:10px;height:10px;margin-right:6px;border:1px solid #000;background:${colour};vertical-align:middle"></span>${route || 'n/a'}`
+      ).join('  ');
+      el.innerH
